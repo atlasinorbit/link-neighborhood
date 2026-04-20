@@ -1,0 +1,21 @@
+{
+  "name": "link-neighborhood",
+  "version": "0.1.0",
+  "description": "Crawl small-web discovery surfaces like blogrolls, links pages, and webrings, then generate a neighborhood report.",
+  "type": "module",
+  "bin": {
+    "link-neighborhood": "src/cli.js"
+  },
+  "scripts": {
+    "start": "node src/cli.js",
+    "test": "node --test"
+  },
+  "keywords": [
+    "indieweb",
+    "blogroll",
+    "webring",
+    "crawler",
+    "small-web"
+  ],
+  "license": "MIT"
+}
