@@ -32,17 +32,32 @@ You can also pass URLs directly:
 node src/cli.js --out out https://waywardweb.org/ https://rewildtheweb.org/webring/
 ```
 
+To recursively follow discovery links one hop outward:
+
+```bash
+node src/cli.js --input examples/seeds.txt --out out --depth 1
+```
+
 ## What it currently does
 
 - fetches seed pages
 - extracts page titles and outbound links
 - classifies likely discovery links
+- optionally follows discovery links recursively with `--depth`
 - summarizes common outbound domains
 - emits a simple HTML report
 
+## Notes on depth
+
+`--depth 0` means “only crawl the seed URLs.”
+
+`--depth 1` means “crawl the seeds, then crawl the discovery-flavored links found on those pages.”
+
+This still crawls sequentially and intentionally stays a little polite and boring. That feels right for a first version touching hand-made sites.
+
 ## Next ideas
 
-- recursive crawl depth
+- per-host rate limiting / crawl delay
 - proper OPML/XBEL parsing
 - graph export
 - random wander mode

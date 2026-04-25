@@ -6,13 +6,15 @@ const DEFAULT_OUT_DIR = 'out';
 const USER_AGENT = 'link-neighborhood/0.1 (+https://github.com/atlasinorbit/link-neighborhood)';
 
 function parseArgs(argv) {
-  const args = { urls: [], outDir: DEFAULT_OUT_DIR, input: null };
+  const args = { urls: [], outDir: DEFAULT_OUT_DIR, input: null, depth: 0 };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--out') {
       args.outDir = argv[++i];
     } else if (arg === '--input') {
       args.input = argv[++i];
+    } else if (arg === '--depth') {
+      args.depth = Number.parseInt(argv[++i], 10) || 0;
     } else {
       args.urls.push(arg);
     }
@@ -165,7 +167,7 @@ function renderHtml(report) {
     <section class="card">
       <h2><a href="${escapeHtml(page.url)}">${escapeHtml(page.title || page.url)}</a></h2>
       <p class="meta">${escapeHtml(page.url)}</p>
-      <p>${page.discoveryLinks.length} discovery-flavored links out of ${page.linkCount} total outbound links.</p>
+      <p>${page.discoveryLinks.length} discovery-flavored links out of ${page.linkCount} total outbound links.${page.depth > 0 ? ` Reached at crawl depth ${page.depth}.` : ''}</p>
       <ul>${discoveryItems || '<li>No discovery links found.</li>'}</ul>
     </section>`;
   }).join('\n');
@@ -190,7 +192,8 @@ function renderHtml(report) {
 <body>
   <h1>link-neighborhood report</h1>
   <p class="meta">Generated ${escapeHtml(report.generatedAt)}</p>
-  <p>Crawled ${report.pages.length} seed pages and found ${report.pages.reduce((sum, page) => sum + page.discoveryLinks.length, 0)} discovery-flavored outbound links.</p>
+  <p>Crawled ${report.pages.length} page${report.pages.length === 1 ? '' : 's'} from ${report.seedUrls.length} seed${report.seedUrls.length === 1 ? '' : 's'} and found ${report.pages.reduce((sum, page) => sum + page.discoveryLinks.length, 0)} discovery-flavored outbound links.</p>
+  <p>Max crawl depth: <code>${report.maxDepth}</code></p>
 
   <section class="card">
     <h2>Top linked domains</h2>
@@ -218,7 +221,7 @@ async function fetchPage(url) {
   };
 }
 
-async function crawlPage(url) {
+async function crawlPage(url, depth = 0) {
   try {
     const page = await fetchPage(url);
     const title = extractTitle(page.html);
@@ -231,6 +234,7 @@ async function crawlPage(url) {
       linkCount: links.length,
       discoveryLinks,
       status: 'ok',
+      depth,
     };
   } catch (error) {
     return {
@@ -241,27 +245,50 @@ async function crawlPage(url) {
       discoveryLinks: [],
       status: 'error',
       error: error.message,
+      depth,
     };
   }
+}
+
+async function crawlNeighborhood(seedUrls, maxDepth) {
+  const pages = [];
+  const visited = new Set();
+  const queue = seedUrls.map((url) => ({ url, depth: 0 }));
+
+  while (queue.length > 0) {
+    const { url, depth } = queue.shift();
+    if (visited.has(url)) continue;
+    visited.add(url);
+
+    console.error(`Crawling ${url}${depth > 0 ? ` (depth ${depth})` : ''}`);
+    const page = await crawlPage(url, depth);
+    pages.push(page);
+
+    if (page.status !== 'ok' || depth >= maxDepth) continue;
+
+    for (const link of page.discoveryLinks) {
+      if (visited.has(link.url)) continue;
+      queue.push({ url: link.url, depth: depth + 1 });
+    }
+  }
+
+  return pages;
 }
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const seedUrls = await readSeedUrls(args.input, args.urls);
   if (seedUrls.length === 0) {
-    console.error('Usage: node src/cli.js [--input seeds.txt] [--out out] <url...>');
+    console.error('Usage: node src/cli.js [--input seeds.txt] [--out out] [--depth 0] <url...>');
     process.exit(1);
   }
 
-  const pages = [];
-  for (const url of seedUrls) {
-    console.error(`Crawling ${url}`);
-    pages.push(await crawlPage(url));
-  }
+  const pages = await crawlNeighborhood(seedUrls, Math.max(0, args.depth));
 
   const report = {
     generatedAt: new Date().toISOString(),
     seedUrls,
+    maxDepth: Math.max(0, args.depth),
     pages,
     topDomains: summarizeDomains(pages),
   };
