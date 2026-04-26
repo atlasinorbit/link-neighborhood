@@ -58,24 +58,35 @@ function extractTitle(html) {
 
 function normalizeUrl(url, baseUrl) {
   try {
-    return new URL(url, baseUrl).toString();
+    const resolved = new URL(url, baseUrl);
+    resolved.hash = '';
+    return resolved.toString();
   } catch {
     return null;
   }
 }
 
 function classifyLink(url, text = '', rel = '') {
-  const lowerUrl = url.toLowerCase();
   const lowerText = text.toLowerCase();
   const lowerRel = rel.toLowerCase();
   const tags = new Set();
 
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return [];
+  }
+
+  const lowerHost = parsed.host.toLowerCase();
+  const lowerPath = parsed.pathname.toLowerCase();
+
   if (lowerRel.includes('blogroll')) tags.add('blogroll-rel');
-  if (lowerUrl.endsWith('.opml')) tags.add('opml');
-  if (lowerUrl.endsWith('.xml') && (lowerText.includes('opml') || lowerText.includes('blogroll'))) tags.add('opml-ish');
-  if (lowerUrl.endsWith('.xbel')) tags.add('xbel');
-  if (/\/(links?|blogroll|elsewhere|following|recommendations?|bookmarks?)\b/.test(lowerUrl)) tags.add('links-page');
-  if (lowerUrl.includes('webring') || lowerText.includes('webring')) tags.add('webring');
+  if (lowerPath.endsWith('.opml')) tags.add('opml');
+  if (lowerPath.endsWith('.xml') && (lowerText.includes('opml') || lowerText.includes('blogroll'))) tags.add('opml-ish');
+  if (lowerPath.endsWith('.xbel')) tags.add('xbel');
+  if (/\/(links?|blogroll|elsewhere|following|recommendations?|bookmarks?)\b/.test(lowerPath)) tags.add('links-page');
+  if (lowerHost.includes('webring') || lowerPath.includes('webring') || lowerText.includes('webring')) tags.add('webring');
   if (lowerText.includes('blogroll')) tags.add('blogroll-text');
   if (lowerText.includes('directory')) tags.add('directory');
   if (lowerText.includes('random')) tags.add('random-hop');
@@ -152,6 +163,30 @@ function summarizeDomains(pages) {
     .map(([host, count]) => ({ host, count }));
 }
 
+function summarizeTags(pages) {
+  const counts = new Map();
+  for (const page of pages) {
+    for (const link of page.discoveryLinks) {
+      for (const tag of link.tags || []) {
+        counts.set(tag, (counts.get(tag) || 0) + 1);
+      }
+    }
+  }
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([tag, count]) => ({ tag, count }));
+}
+
+function collectDiscoveryUrls(pages) {
+  const urls = new Set();
+  for (const page of pages) {
+    for (const link of page.discoveryLinks) {
+      if (link.url) urls.add(link.url);
+    }
+  }
+  return [...urls].sort();
+}
+
 function escapeHtml(value) {
   return String(value)
     .replace(/&/g, '&amp;')
@@ -173,6 +208,7 @@ function renderHtml(report) {
   }).join('\n');
 
   const domainItems = report.topDomains.map((item) => `<li><strong>${escapeHtml(item.host)}</strong> — ${item.count}</li>`).join('');
+  const tagItems = report.tagSummary.map((item) => `<li><strong>${escapeHtml(item.tag)}</strong> — ${item.count}</li>`).join('');
 
   return `<!doctype html>
 <html lang="en">
@@ -198,6 +234,16 @@ function renderHtml(report) {
   <section class="card">
     <h2>Top linked domains</h2>
     <ul>${domainItems || '<li>No domains yet.</li>'}</ul>
+  </section>
+
+  <section class="card">
+    <h2>Discovery tags</h2>
+    <ul>${tagItems || '<li>No discovery tags yet.</li>'}</ul>
+  </section>
+
+  <section class="card">
+    <h2>Reusable trail</h2>
+    <p>Saved <code>discovery-links.txt</code> with ${report.discoveryUrls.length} unique discovery-flavored URLs for reuse as future seeds.</p>
   </section>
 
   ${pageCards}
@@ -285,18 +331,22 @@ async function main() {
 
   const pages = await crawlNeighborhood(seedUrls, Math.max(0, args.depth));
 
+  const discoveryUrls = collectDiscoveryUrls(pages);
   const report = {
     generatedAt: new Date().toISOString(),
     seedUrls,
     maxDepth: Math.max(0, args.depth),
     pages,
     topDomains: summarizeDomains(pages),
+    tagSummary: summarizeTags(pages),
+    discoveryUrls,
   };
 
   await fs.mkdir(args.outDir, { recursive: true });
   await fs.writeFile(path.join(args.outDir, 'report.json'), JSON.stringify(report, null, 2));
   await fs.writeFile(path.join(args.outDir, 'report.html'), renderHtml(report));
-  console.error(`Wrote ${path.join(args.outDir, 'report.json')} and report.html`);
+  await fs.writeFile(path.join(args.outDir, 'discovery-links.txt'), `${discoveryUrls.join('\n')}\n`);
+  console.error(`Wrote ${path.join(args.outDir, 'report.json')}, report.html, and discovery-links.txt`);
 }
 
 main().catch((error) => {

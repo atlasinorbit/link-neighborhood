@@ -13,6 +13,7 @@ Then it writes:
 
 - `report.json` — structured crawl output
 - `report.html` — a human-browsable neighborhood report
+- `discovery-links.txt` — unique discovery-flavored URLs you can feed back in as future seeds
 
 ## Why
 
@@ -44,8 +45,9 @@ node src/cli.js --input examples/seeds.txt --out out --depth 1
 - extracts page titles and outbound links
 - classifies likely discovery links
 - optionally follows discovery links recursively with `--depth`
-- summarizes common outbound domains
+- summarizes common outbound domains and discovery tags
 - emits a simple HTML report
+- saves a reusable discovery trail for the next crawl, with fragment-only duplicates stripped out
 
 ## Notes on depth
 

@@ -40,12 +40,17 @@ test('cli generates report files from a local html seed', async () => {
 
     const reportJson = JSON.parse(await fs.readFile(path.join(outDir, 'report.json'), 'utf8'));
     const html = await fs.readFile(path.join(outDir, 'report.html'), 'utf8');
+    const discoveryLinks = await fs.readFile(path.join(outDir, 'discovery-links.txt'), 'utf8');
 
     assert.equal(reportJson.pages.length, 1);
     assert.equal(reportJson.pages[0].title, 'Example Links');
     assert.ok(reportJson.pages[0].discoveryLinks.some((link) => link.tags.includes('blogroll-rel')));
     assert.equal(reportJson.maxDepth, 0);
+    assert.ok(reportJson.tagSummary.some((item) => item.tag === 'blogroll-rel'));
+    assert.ok(reportJson.discoveryUrls.includes('https://example.com/blogroll.opml'));
+    assert.match(discoveryLinks, /https:\/\/example\.com\/blogroll\.opml/);
     assert.match(html, /link-neighborhood report/);
+    assert.match(html, /Reusable trail/);
   } finally {
     server.close();
     await fs.rm(tempDir, { recursive: true, force: true });
@@ -86,6 +91,40 @@ test('cli follows discovery links when depth is enabled', async () => {
     assert.ok(crawledUrls.includes(url));
     assert.ok(crawledUrls.includes(`${url}links`));
     assert.ok(reportJson.pages.some((page) => page.depth === 1 && page.title === 'Second Room'));
+    assert.ok(reportJson.discoveryUrls.includes(`${url}blogroll.opml`));
+  } finally {
+    server.close();
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('cli strips fragments and avoids query-string false positives when exporting discovery urls', async () => {
+  const tempDir = path.join(process.cwd(), 'tmp-test-normalize');
+  await fs.rm(tempDir, { recursive: true, force: true });
+  await fs.mkdir(tempDir, { recursive: true });
+
+  const seedHtml = `<!doctype html><html><head><title>Normalize</title></head><body>
+    <a href="/links#section">Links With Fragment</a>
+    <a href="https://example.com/share?target=/links">Share thing</a>
+  </body></html>`;
+
+  const server = http.createServer((_req, res) => {
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    res.end(seedHtml);
+  });
+
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  const url = `http://127.0.0.1:${address.port}/`;
+
+  try {
+    const outDir = path.join(tempDir, 'out');
+    await execFileAsync('node', ['src/cli.js', '--out', outDir, url], { cwd: process.cwd() });
+
+    const reportJson = JSON.parse(await fs.readFile(path.join(outDir, 'report.json'), 'utf8'));
+    assert.ok(reportJson.discoveryUrls.includes(`${url}links`));
+    assert.ok(!reportJson.discoveryUrls.includes(`${url}links#section`));
+    assert.ok(!reportJson.discoveryUrls.includes('https://example.com/share?target=/links'));
   } finally {
     server.close();
     await fs.rm(tempDir, { recursive: true, force: true });
