@@ -41,6 +41,8 @@ test('cli generates report files from a local html seed', async () => {
     const reportJson = JSON.parse(await fs.readFile(path.join(outDir, 'report.json'), 'utf8'));
     const html = await fs.readFile(path.join(outDir, 'report.html'), 'utf8');
     const discoveryLinks = await fs.readFile(path.join(outDir, 'discovery-links.txt'), 'utf8');
+    const graphJson = JSON.parse(await fs.readFile(path.join(outDir, 'graph.json'), 'utf8'));
+    const graphDot = await fs.readFile(path.join(outDir, 'graph.dot'), 'utf8');
 
     assert.equal(reportJson.pages.length, 1);
     assert.equal(reportJson.pages[0].title, 'Example Links');
@@ -48,9 +50,14 @@ test('cli generates report files from a local html seed', async () => {
     assert.equal(reportJson.maxDepth, 0);
     assert.ok(reportJson.tagSummary.some((item) => item.tag === 'blogroll-rel'));
     assert.ok(reportJson.discoveryUrls.includes('https://example.com/blogroll.opml'));
+    assert.ok(reportJson.graph.nodes.some((node) => node.url === url && node.type === 'seed'));
+    assert.ok(graphJson.edges.some((edge) => edge.from === url && edge.to === 'https://example.com/blogroll.opml'));
+    assert.ok(!graphJson.edges.some((edge) => edge.from === edge.to));
     assert.match(discoveryLinks, /https:\/\/example\.com\/blogroll\.opml/);
+    assert.match(graphDot, /digraph link_neighborhood/);
     assert.match(html, /link-neighborhood report/);
     assert.match(html, /Reusable trail/);
+    assert.match(html, /Graph export/);
   } finally {
     server.close();
     await fs.rm(tempDir, { recursive: true, force: true });

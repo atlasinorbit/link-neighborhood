@@ -234,6 +234,96 @@ function collectDiscoveryUrls(pages) {
   return [...urls].sort();
 }
 
+function buildGraph(pages) {
+  const nodeMap = new Map();
+  const edgeMap = new Map();
+
+  const ensureNode = (url, extras = {}) => {
+    if (!url) return;
+    let existing = nodeMap.get(url);
+    if (!existing) {
+      let host = null;
+      try {
+        host = new URL(url).host;
+      } catch {
+        host = null;
+      }
+      existing = { url, host, title: null, type: 'discovery', tags: [] };
+      nodeMap.set(url, existing);
+    }
+
+    if (extras.title && !existing.title) existing.title = extras.title;
+    if (extras.type) existing.type = extras.type;
+    if (extras.tags?.length) {
+      existing.tags = [...new Set([...(existing.tags || []), ...extras.tags])].sort();
+    }
+  };
+
+  for (const page of pages) {
+    ensureNode(page.url, {
+      title: page.title || page.url,
+      type: page.depth === 0 ? 'seed' : 'crawled',
+      tags: [],
+    });
+
+    for (const link of page.discoveryLinks) {
+      ensureNode(link.url, {
+        title: link.text || null,
+        type: 'discovery',
+        tags: link.tags || [],
+      });
+
+      const key = `${page.url} -> ${link.url}`;
+      if (!edgeMap.has(key)) {
+        edgeMap.set(key, {
+          from: page.url,
+          to: link.url,
+          tags: [...new Set(link.tags || [])].sort(),
+          text: link.text || '',
+          rel: link.rel || '',
+          source: link.source || 'html',
+        });
+        continue;
+      }
+
+      const existing = edgeMap.get(key);
+      existing.tags = [...new Set([...(existing.tags || []), ...(link.tags || [])])].sort();
+      existing.text = existing.text || link.text || '';
+      existing.rel = existing.rel || link.rel || '';
+      existing.source = existing.source || link.source || 'html';
+    }
+  }
+
+  return {
+    nodes: [...nodeMap.values()].sort((a, b) => a.url.localeCompare(b.url)),
+    edges: [...edgeMap.values()].sort((a, b) => {
+      if (a.from === b.from) return a.to.localeCompare(b.to);
+      return a.from.localeCompare(b.from);
+    }),
+  };
+}
+
+function renderDot(graph) {
+  const lines = ['digraph link_neighborhood {', '  rankdir=LR;', '  node [shape=box, style="rounded"];'];
+
+  for (const node of graph.nodes) {
+    const label = (node.title || node.url).replace(/"/g, '\\"');
+    const url = node.url.replace(/"/g, '\\"');
+    const color = node.type === 'seed' ? '#2563eb' : node.type === 'crawled' ? '#7c3aed' : '#6b7280';
+    lines.push(`  "${url}" [label="${label}", color="${color}"];`);
+  }
+
+  for (const edge of graph.edges) {
+    const from = edge.from.replace(/"/g, '\\"');
+    const to = edge.to.replace(/"/g, '\\"');
+    const label = edge.tags?.length ? ` [label="${edge.tags.join(', ').replace(/"/g, '\\"')}"]` : '';
+    lines.push(`  "${from}" -> "${to}"${label};`);
+  }
+
+  lines.push('}');
+  return `${lines.join('\n')}\n`;
+}
+
 function escapeHtml(value) {
   return String(value)
     .replace(/&/g, '&amp;')
@@ -293,6 +383,11 @@ function renderHtml(report) {
     <p>Saved <code>discovery-links.txt</code> with ${report.discoveryUrls.length} unique discovery-flavored URLs for reuse as future seeds.</p>
   </section>
 
+  <section class="card">
+    <h2>Graph export</h2>
+    <p>Saved <code>graph.json</code> with ${report.graph.nodes.length} nodes and ${report.graph.edges.length} directed discovery edges, plus a Graphviz-friendly <code>graph.dot</code> sketch for quick mapping.</p>
+  </section>
+
   ${pageCards}
 </body>
 </html>`;
@@ -319,7 +414,7 @@ async function crawlPage(url, depth = 0) {
     const page = await fetchPage(url);
     const title = extractTitle(page.html);
     const links = extractLinks(page.html, page.url, page.contentType);
-    const discoveryLinks = links.filter((link) => link.tags.length > 0);
+    const discoveryLinks = links.filter((link) => link.tags.length > 0 && link.url !== page.url);
     return {
       url: page.url,
       title,
@@ -379,6 +474,7 @@ async function main() {
   const pages = await crawlNeighborhood(seedUrls, Math.max(0, args.depth));
 
   const discoveryUrls = collectDiscoveryUrls(pages);
+  const graph = buildGraph(pages);
   const report = {
     generatedAt: new Date().toISOString(),
     seedUrls,
@@ -387,13 +483,16 @@ async function main() {
     topDomains: summarizeDomains(pages),
     tagSummary: summarizeTags(pages),
     discoveryUrls,
+    graph,
   };
 
   await fs.mkdir(args.outDir, { recursive: true });
   await fs.writeFile(path.join(args.outDir, 'report.json'), JSON.stringify(report, null, 2));
   await fs.writeFile(path.join(args.outDir, 'report.html'), renderHtml(report));
   await fs.writeFile(path.join(args.outDir, 'discovery-links.txt'), `${discoveryUrls.join('\n')}\n`);
-  console.error(`Wrote ${path.join(args.outDir, 'report.json')}, report.html, and discovery-links.txt`);
+  await fs.writeFile(path.join(args.outDir, 'graph.json'), JSON.stringify(graph, null, 2));
+  await fs.writeFile(path.join(args.outDir, 'graph.dot'), renderDot(graph));
+  console.error(`Wrote ${path.join(args.outDir, 'report.json')}, report.html, discovery-links.txt, graph.json, and graph.dot`);
 }
 
 main().catch((error) => {
