@@ -44,6 +44,7 @@ node src/cli.js --input examples/seeds.txt --out out --depth 1
 - fetches seed pages
 - extracts page titles and outbound links
 - classifies likely discovery links
+- parses discovered `OPML` and `XBEL` files for linked sites/feeds/bookmarks instead of treating them as dead-end blobs
 - optionally follows discovery links recursively with `--depth`
 - summarizes common outbound domains and discovery tags
 - emits a simple HTML report
@@ -60,7 +61,6 @@ This still crawls sequentially and intentionally stays a little polite and borin
 ## Next ideas
 
 - per-host rate limiting / crawl delay
-- proper OPML/XBEL parsing
 - graph export
 - random wander mode
 - cached fetches and diffing between runs

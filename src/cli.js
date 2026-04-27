@@ -94,7 +94,7 @@ function classifyLink(url, text = '', rel = '') {
   return [...tags];
 }
 
-function extractLinks(html, baseUrl) {
+function extractHtmlLinks(html, baseUrl) {
   const links = [];
   const anchorRegex = /<a\b([^>]*?)href\s*=\s*(["'])(.*?)\2([^>]*)>([\s\S]*?)<\/a>/gi;
   for (const match of html.matchAll(anchorRegex)) {
@@ -126,6 +126,53 @@ function extractLinks(html, baseUrl) {
     links.push({ url: absolute, text: '', rel, tags, source: 'head' });
   }
 
+  return links;
+}
+
+function extractXmlLinks(xml, baseUrl) {
+  const links = [];
+
+  const opmlOutlineRegex = /<outline\b[^>]*\b(?:xmlUrl|htmlUrl|url)\s*=\s*(["'])(.*?)\1[^>]*>/gi;
+  for (const match of xml.matchAll(opmlOutlineRegex)) {
+    const tag = match[0] || '';
+    const textMatch = tag.match(/\b(?:text|title)\s*=\s*(["'])(.*?)\1/i);
+    const htmlUrlMatch = tag.match(/\bhtmlUrl\s*=\s*(["'])(.*?)\1/i);
+    const xmlUrlMatch = tag.match(/\bxmlUrl\s*=\s*(["'])(.*?)\1/i);
+    const urlMatch = tag.match(/\burl\s*=\s*(["'])(.*?)\1/i);
+
+    const candidates = [
+      { value: htmlUrlMatch?.[2], rel: 'opml-htmlUrl', source: 'opml' },
+      { value: xmlUrlMatch?.[2], rel: 'opml-xmlUrl', source: 'opml' },
+      { value: urlMatch?.[2], rel: 'opml-url', source: 'opml' },
+    ];
+
+    for (const candidate of candidates) {
+      if (!candidate.value) continue;
+      const absolute = normalizeUrl(candidate.value, baseUrl);
+      if (!absolute || !absolute.startsWith('http')) continue;
+      const text = textMatch ? stripTags(textMatch[2]) : '';
+      const tags = [...new Set([...classifyLink(absolute, text, candidate.rel), 'opml-entry'])];
+      links.push({ url: absolute, text, rel: candidate.rel, tags, source: candidate.source });
+    }
+  }
+
+  const xbelBookmarkRegex = /<bookmark\b[^>]*\bhref\s*=\s*(["'])(.*?)\1[^>]*>([\s\S]*?)<\/bookmark>/gi;
+  for (const match of xml.matchAll(xbelBookmarkRegex)) {
+    const absolute = normalizeUrl(match[2] || '', baseUrl);
+    if (!absolute || !absolute.startsWith('http')) continue;
+    const titleMatch = (match[3] || '').match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+    const text = titleMatch ? stripTags(titleMatch[1]) : '';
+    const tags = [...new Set([...classifyLink(absolute, text, 'xbel-bookmark'), 'xbel-entry'])];
+    links.push({ url: absolute, text, rel: 'xbel-bookmark', tags, source: 'xbel' });
+  }
+
+  return links;
+}
+
+function extractLinks(content, baseUrl, contentType = '') {
+  const lowerType = contentType.toLowerCase();
+  const looksXml = lowerType.includes('xml') || lowerType.includes('opml') || lowerType.includes('xbel') || /^\s*<\?xml\b/i.test(content);
+  const links = looksXml ? extractXmlLinks(content, baseUrl) : extractHtmlLinks(content, baseUrl);
   return dedupeLinks(links);
 }
 
@@ -271,7 +318,7 @@ async function crawlPage(url, depth = 0) {
   try {
     const page = await fetchPage(url);
     const title = extractTitle(page.html);
-    const links = extractLinks(page.html, page.url);
+    const links = extractLinks(page.html, page.url, page.contentType);
     const discoveryLinks = links.filter((link) => link.tags.length > 0);
     return {
       url: page.url,

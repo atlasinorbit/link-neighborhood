@@ -130,3 +130,62 @@ test('cli strips fragments and avoids query-string false positives when exportin
     await fs.rm(tempDir, { recursive: true, force: true });
   }
 });
+
+test('cli extracts linked sites from opml and xbel discovery files', async () => {
+  const tempDir = path.join(process.cwd(), 'tmp-test-xml');
+  await fs.rm(tempDir, { recursive: true, force: true });
+  await fs.mkdir(tempDir, { recursive: true });
+
+  const server = http.createServer((req, res) => {
+    if (req.url === '/blogroll.opml') {
+      res.writeHead(200, { 'content-type': 'text/x-opml; charset=utf-8' });
+      res.end(`<?xml version="1.0"?>
+        <opml version="2.0">
+          <body>
+            <outline text="Planet Example" htmlUrl="https://planet.example/" xmlUrl="https://planet.example/feed.xml" />
+            <outline text="Links Room" url="https://planet.example/links" />
+          </body>
+        </opml>`);
+      return;
+    }
+    if (req.url === '/bookmarks.xbel') {
+      res.writeHead(200, { 'content-type': 'application/xml; charset=utf-8' });
+      res.end(`<?xml version="1.0"?>
+        <xbel>
+          <bookmark href="https://forest.example/webring">
+            <title>Forest Ring</title>
+          </bookmark>
+        </xbel>`);
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    res.end(`<!doctype html><html><head><title>XML Door</title></head><body>
+      <a href="/blogroll.opml">Blogroll file</a>
+      <a href="/bookmarks.xbel">Bookmarks</a>
+    </body></html>`);
+  });
+
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  const url = `http://127.0.0.1:${address.port}/`;
+
+  try {
+    const outDir = path.join(tempDir, 'out');
+    await execFileAsync('node', ['src/cli.js', '--depth', '1', '--out', outDir, url], { cwd: process.cwd() });
+
+    const reportJson = JSON.parse(await fs.readFile(path.join(outDir, 'report.json'), 'utf8'));
+    const opmlPage = reportJson.pages.find((page) => page.url === `${url}blogroll.opml`);
+    const xbelPage = reportJson.pages.find((page) => page.url === `${url}bookmarks.xbel`);
+
+    assert.ok(opmlPage);
+    assert.ok(xbelPage);
+    assert.ok(opmlPage.discoveryLinks.some((link) => link.url === 'https://planet.example/' && link.tags.includes('opml-entry')));
+    assert.ok(opmlPage.discoveryLinks.some((link) => link.url === 'https://planet.example/feed.xml' && link.tags.includes('opml-entry')));
+    assert.ok(xbelPage.discoveryLinks.some((link) => link.url === 'https://forest.example/webring' && link.tags.includes('xbel-entry')));
+    assert.ok(reportJson.discoveryUrls.includes('https://planet.example/links'));
+    assert.ok(reportJson.discoveryUrls.includes('https://forest.example/webring'));
+  } finally {
+    server.close();
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+});
