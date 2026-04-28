@@ -14,6 +14,7 @@ Then it writes:
 - `report.json` — structured crawl output
 - `report.html` — a human-browsable neighborhood report
 - `discovery-links.txt` — unique discovery-flavored URLs you can feed back in as future seeds
+- `wander.txt` — a small random sampler of discovery URLs for immediate drifting
 - `graph.json` — nodes + directed edges for lightweight network analysis or custom visualizations
 - `graph.dot` — a Graphviz-friendly sketch for quick maps and experiments
 
@@ -27,6 +28,12 @@ This is a first pass at seeing those paths more clearly.
 
 ```bash
 node src/cli.js --input examples/seeds.txt --out out
+```
+
+Add a small serendipity sampler to the output report:
+
+```bash
+node src/cli.js --input examples/seeds.txt --out out --wander 8
 ```
 
 You can also pass URLs directly:
@@ -52,6 +59,7 @@ node src/cli.js --input examples/seeds.txt --out out --depth 1
 - emits a simple HTML report
 - writes a lightweight graph export (`graph.json` + `graph.dot`) for mapping the neighborhood, with obvious self-loop noise stripped out
 - saves a reusable discovery trail for the next crawl, with fragment-only duplicates stripped out
+- saves a small random wander list for immediate serendipity after each crawl
 
 ## Notes on depth
 

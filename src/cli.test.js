@@ -41,6 +41,7 @@ test('cli generates report files from a local html seed', async () => {
     const reportJson = JSON.parse(await fs.readFile(path.join(outDir, 'report.json'), 'utf8'));
     const html = await fs.readFile(path.join(outDir, 'report.html'), 'utf8');
     const discoveryLinks = await fs.readFile(path.join(outDir, 'discovery-links.txt'), 'utf8');
+    const wander = await fs.readFile(path.join(outDir, 'wander.txt'), 'utf8');
     const graphJson = JSON.parse(await fs.readFile(path.join(outDir, 'graph.json'), 'utf8'));
     const graphDot = await fs.readFile(path.join(outDir, 'graph.dot'), 'utf8');
 
@@ -55,9 +56,11 @@ test('cli generates report files from a local html seed', async () => {
     assert.ok(!graphJson.edges.some((edge) => edge.from === edge.to));
     assert.match(discoveryLinks, /https:\/\/example\.com\/blogroll\.opml/);
     assert.match(graphDot, /digraph link_neighborhood/);
+    assert.match(wander, /https:\/\/example\.com\/(blogroll\.opml|links|webring)/);
     assert.match(html, /link-neighborhood report/);
     assert.match(html, /Reusable trail/);
     assert.match(html, /Graph export/);
+    assert.match(html, /Wander picks/);
   } finally {
     server.close();
     await fs.rm(tempDir, { recursive: true, force: true });
@@ -132,6 +135,40 @@ test('cli strips fragments and avoids query-string false positives when exportin
     assert.ok(reportJson.discoveryUrls.includes(`${url}links`));
     assert.ok(!reportJson.discoveryUrls.includes(`${url}links#section`));
     assert.ok(!reportJson.discoveryUrls.includes('https://example.com/share?target=/links'));
+  } finally {
+    server.close();
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('cli wander sampler excludes original seed urls', async () => {
+  const tempDir = path.join(process.cwd(), 'tmp-test-wander');
+  await fs.rm(tempDir, { recursive: true, force: true });
+  await fs.mkdir(tempDir, { recursive: true });
+
+  const seedHtml = `<!doctype html><html><head><title>Wander</title></head><body>
+    <a href="https://example.com/links">Links</a>
+    <a href="https://example.com/webring">Webring</a>
+    <a href="https://example.com/blogroll">Blogroll</a>
+  </body></html>`;
+
+  const server = http.createServer((_req, res) => {
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    res.end(seedHtml);
+  });
+
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  const url = `http://127.0.0.1:${address.port}/`;
+
+  try {
+    const outDir = path.join(tempDir, 'out');
+    await execFileAsync('node', ['src/cli.js', '--wander', '2', '--out', outDir, url], { cwd: process.cwd() });
+
+    const reportJson = JSON.parse(await fs.readFile(path.join(outDir, 'report.json'), 'utf8'));
+    assert.equal(reportJson.wanderUrls.length, 2);
+    assert.ok(reportJson.wanderUrls.every((item) => item !== url));
+    assert.ok(reportJson.wanderUrls.every((item) => reportJson.discoveryUrls.includes(item)));
   } finally {
     server.close();
     await fs.rm(tempDir, { recursive: true, force: true });

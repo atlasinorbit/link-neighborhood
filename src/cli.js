@@ -6,7 +6,7 @@ const DEFAULT_OUT_DIR = 'out';
 const USER_AGENT = 'link-neighborhood/0.1 (+https://github.com/atlasinorbit/link-neighborhood)';
 
 function parseArgs(argv) {
-  const args = { urls: [], outDir: DEFAULT_OUT_DIR, input: null, depth: 0 };
+  const args = { urls: [], outDir: DEFAULT_OUT_DIR, input: null, depth: 0, wander: 5 };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--out') {
@@ -15,6 +15,8 @@ function parseArgs(argv) {
       args.input = argv[++i];
     } else if (arg === '--depth') {
       args.depth = Number.parseInt(argv[++i], 10) || 0;
+    } else if (arg === '--wander') {
+      args.wander = Number.parseInt(argv[++i], 10) || 0;
     } else {
       args.urls.push(arg);
     }
@@ -234,6 +236,16 @@ function collectDiscoveryUrls(pages) {
   return [...urls].sort();
 }
 
+function pickWanderUrls(discoveryUrls, count, seedUrls = []) {
+  const pool = discoveryUrls.filter((url) => !seedUrls.includes(url));
+  const shuffled = [...pool];
+  for (let i = shuffled.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+  return shuffled.slice(0, Math.max(0, count));
+}
+
 function buildGraph(pages) {
   const nodeMap = new Map();
   const edgeMap = new Map();
@@ -346,6 +358,7 @@ function renderHtml(report) {
 
   const domainItems = report.topDomains.map((item) => `<li><strong>${escapeHtml(item.host)}</strong> — ${item.count}</li>`).join('');
   const tagItems = report.tagSummary.map((item) => `<li><strong>${escapeHtml(item.tag)}</strong> — ${item.count}</li>`).join('');
+  const wanderItems = report.wanderUrls.map((url) => `<li><a href="${escapeHtml(url)}">${escapeHtml(url)}</a></li>`).join('');
 
   return `<!doctype html>
 <html lang="en">
@@ -386,6 +399,12 @@ function renderHtml(report) {
   <section class="card">
     <h2>Graph export</h2>
     <p>Saved <code>graph.json</code> with ${report.graph.nodes.length} nodes and ${report.graph.edges.length} directed discovery edges, plus a Graphviz-friendly <code>graph.dot</code> sketch for quick mapping.</p>
+  </section>
+
+  <section class="card">
+    <h2>Wander picks</h2>
+    <p>Saved <code>wander.txt</code> with ${report.wanderUrls.length} random discovery URLs as easy places to start drifting from this crawl.</p>
+    <ul>${wanderItems || '<li>No wander picks this time.</li>'}</ul>
   </section>
 
   ${pageCards}
@@ -475,6 +494,7 @@ async function main() {
 
   const discoveryUrls = collectDiscoveryUrls(pages);
   const graph = buildGraph(pages);
+  const wanderUrls = pickWanderUrls(discoveryUrls, args.wander, seedUrls);
   const report = {
     generatedAt: new Date().toISOString(),
     seedUrls,
@@ -483,6 +503,7 @@ async function main() {
     topDomains: summarizeDomains(pages),
     tagSummary: summarizeTags(pages),
     discoveryUrls,
+    wanderUrls,
     graph,
   };
 
@@ -490,9 +511,10 @@ async function main() {
   await fs.writeFile(path.join(args.outDir, 'report.json'), JSON.stringify(report, null, 2));
   await fs.writeFile(path.join(args.outDir, 'report.html'), renderHtml(report));
   await fs.writeFile(path.join(args.outDir, 'discovery-links.txt'), `${discoveryUrls.join('\n')}\n`);
+  await fs.writeFile(path.join(args.outDir, 'wander.txt'), `${wanderUrls.join('\n')}\n`);
   await fs.writeFile(path.join(args.outDir, 'graph.json'), JSON.stringify(graph, null, 2));
   await fs.writeFile(path.join(args.outDir, 'graph.dot'), renderDot(graph));
-  console.error(`Wrote ${path.join(args.outDir, 'report.json')}, report.html, discovery-links.txt, graph.json, and graph.dot`);
+  console.error(`Wrote ${path.join(args.outDir, 'report.json')}, report.html, discovery-links.txt, wander.txt, graph.json, and graph.dot`);
 }
 
 main().catch((error) => {
