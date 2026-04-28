@@ -42,6 +42,8 @@ test('cli generates report files from a local html seed', async () => {
     const html = await fs.readFile(path.join(outDir, 'report.html'), 'utf8');
     const discoveryLinks = await fs.readFile(path.join(outDir, 'discovery-links.txt'), 'utf8');
     const wander = await fs.readFile(path.join(outDir, 'wander.txt'), 'utf8');
+    const opml = await fs.readFile(path.join(outDir, 'blogroll.opml'), 'utf8');
+    const xsl = await fs.readFile(path.join(outDir, 'blogroll.xsl'), 'utf8');
     const graphJson = JSON.parse(await fs.readFile(path.join(outDir, 'graph.json'), 'utf8'));
     const graphDot = await fs.readFile(path.join(outDir, 'graph.dot'), 'utf8');
 
@@ -57,10 +59,14 @@ test('cli generates report files from a local html seed', async () => {
     assert.match(discoveryLinks, /https:\/\/example\.com\/blogroll\.opml/);
     assert.match(graphDot, /digraph link_neighborhood/);
     assert.match(wander, /https:\/\/example\.com\/(blogroll\.opml|links|webring)/);
+    assert.match(opml, /<\?xml-stylesheet type="text\/xsl" href="blogroll.xsl"\?>/);
+    assert.match(opml, /<outline text="Example Links"|<outline text="Links"|<outline text="https:\/\/example\.com\/links"/);
+    assert.match(xsl, /xsl:stylesheet/);
     assert.match(html, /link-neighborhood report/);
     assert.match(html, /Reusable trail/);
     assert.match(html, /Graph export/);
     assert.match(html, /Wander picks/);
+    assert.match(html, /OPML export/);
   } finally {
     server.close();
     await fs.rm(tempDir, { recursive: true, force: true });
@@ -135,6 +141,68 @@ test('cli strips fragments and avoids query-string false positives when exportin
     assert.ok(reportJson.discoveryUrls.includes(`${url}links`));
     assert.ok(!reportJson.discoveryUrls.includes(`${url}links#section`));
     assert.ok(!reportJson.discoveryUrls.includes('https://example.com/share?target=/links'));
+  } finally {
+    server.close();
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('cli decodes common html entities in discovered link text', async () => {
+  const tempDir = path.join(process.cwd(), 'tmp-test-entities');
+  await fs.rm(tempDir, { recursive: true, force: true });
+  await fs.mkdir(tempDir, { recursive: true });
+
+  const seedHtml = `<!doctype html><html><head><title>Entities</title></head><body>
+    <a href="https://example.com/links">Brandon&amp;rsquo;s Journal</a>
+  </body></html>`;
+
+  const server = http.createServer((_req, res) => {
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    res.end(seedHtml);
+  });
+
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  const url = `http://127.0.0.1:${address.port}/`;
+
+  try {
+    const outDir = path.join(tempDir, 'out');
+    await execFileAsync('node', ['src/cli.js', '--out', outDir, url], { cwd: process.cwd() });
+
+    const reportJson = JSON.parse(await fs.readFile(path.join(outDir, 'report.json'), 'utf8'));
+    assert.equal(reportJson.pages[0].discoveryLinks[0].text, 'Brandon’s Journal');
+  } finally {
+    server.close();
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('cli ignores obvious asset files even if their paths contain discovery words', async () => {
+  const tempDir = path.join(process.cwd(), 'tmp-test-assets');
+  await fs.rm(tempDir, { recursive: true, force: true });
+  await fs.mkdir(tempDir, { recursive: true });
+
+  const seedHtml = `<!doctype html><html><head><title>Assets</title></head><body>
+    <a href="https://example.com/assets/Links.js">Not a real links page</a>
+    <a href="https://example.com/links">Actual links page</a>
+  </body></html>`;
+
+  const server = http.createServer((_req, res) => {
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    res.end(seedHtml);
+  });
+
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  const url = `http://127.0.0.1:${address.port}/`;
+
+  try {
+    const outDir = path.join(tempDir, 'out');
+    await execFileAsync('node', ['src/cli.js', '--out', outDir, url], { cwd: process.cwd() });
+
+    const reportJson = JSON.parse(await fs.readFile(path.join(outDir, 'report.json'), 'utf8'));
+    assert.ok(reportJson.discoveryUrls.includes('https://example.com/links'));
+    assert.ok(!reportJson.discoveryUrls.includes('https://example.com/assets/Links.js'));
   } finally {
     server.close();
     await fs.rm(tempDir, { recursive: true, force: true });
@@ -228,6 +296,7 @@ test('cli extracts linked sites from opml and xbel discovery files', async () =>
     assert.ok(xbelPage.discoveryLinks.some((link) => link.url === 'https://forest.example/webring' && link.tags.includes('xbel-entry')));
     assert.ok(reportJson.discoveryUrls.includes('https://planet.example/links'));
     assert.ok(reportJson.discoveryUrls.includes('https://forest.example/webring'));
+    assert.ok(reportJson.opmlEntries.some((entry) => entry.url === 'https://planet.example/links'));
   } finally {
     server.close();
     await fs.rm(tempDir, { recursive: true, force: true });

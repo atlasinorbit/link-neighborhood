@@ -42,13 +42,28 @@ async function readSeedUrls(inputPath, directUrls) {
   return [...urls];
 }
 
-function stripTags(html) {
-  return html
-    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<[^>]+>/g, ' ')
+function decodeEntities(text) {
+  return String(text)
+    .replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(Number.parseInt(code, 10)))
+    .replace(/&#x([\da-f]+);/gi, (_, code) => String.fromCodePoint(Number.parseInt(code, 16)))
     .replace(/&nbsp;/g, ' ')
     .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&#39;/g, "'")
+    .replace(/&rsquo;/g, '’')
+    .replace(/&lsquo;/g, '‘')
+    .replace(/&rdquo;/g, '”')
+    .replace(/&ldquo;/g, '“')
+    .replace(/&ndash;/g, '–')
+    .replace(/&mdash;/g, '—');
+}
+
+function stripTags(html) {
+  return decodeEntities(html
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' '))
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -82,6 +97,10 @@ function classifyLink(url, text = '', rel = '') {
 
   const lowerHost = parsed.host.toLowerCase();
   const lowerPath = parsed.pathname.toLowerCase();
+
+  if (/\.(css|js|mjs|json|png|jpe?g|gif|svg|webp|ico|pdf|zip|gz|mp3|mp4|webm|woff2?)$/i.test(lowerPath)) {
+    return [];
+  }
 
   if (lowerRel.includes('blogroll')) tags.add('blogroll-rel');
   if (lowerPath.endsWith('.opml')) tags.add('opml');
@@ -315,6 +334,95 @@ function buildGraph(pages) {
   };
 }
 
+function xmlEscape(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function pickOpmlEntries(report) {
+  const entries = new Map();
+  for (const page of report.pages) {
+    for (const link of page.discoveryLinks) {
+      if (!link.url) continue;
+      const isBlogrollish = (link.tags || []).some((tag) => ['opml', 'opml-entry', 'blogroll-rel', 'blogroll-text', 'links-page'].includes(tag));
+      if (!isBlogrollish) continue;
+      if (!entries.has(link.url)) {
+        entries.set(link.url, {
+          text: link.text || new URL(link.url).host,
+          url: link.url,
+          tags: [...new Set(link.tags || [])].sort(),
+          sourcePage: page.url,
+        });
+      }
+    }
+  }
+  return [...entries.values()].sort((a, b) => a.text.localeCompare(b.text));
+}
+
+function renderOpml(report) {
+  const outlines = report.opmlEntries.map((entry) => `    <outline text="${xmlEscape(entry.text)}" type="link" url="${xmlEscape(entry.url)}" atlas:source="${xmlEscape(entry.sourcePage)}" atlas:tags="${xmlEscape(entry.tags.join(','))}" />`).join('\n');
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<?xml-stylesheet type="text/xsl" href="blogroll.xsl"?>
+<opml version="2.0" xmlns:atlas="https://atlasinorbit.com/ns/link-neighborhood">
+  <head>
+    <title>${xmlEscape('link-neighborhood blogroll')}</title>
+    <dateCreated>${xmlEscape(report.generatedAt)}</dateCreated>
+    <ownerName>Atlas</ownerName>
+    <docs>http://opml.org/spec2.opml</docs>
+  </head>
+  <body>
+    <outline text="Discovery trail from ${xmlEscape(report.seedUrls.join(', '))}">
+${outlines || '      <outline text="No discovery entries found" />'}
+    </outline>
+  </body>
+</opml>
+`;
+}
+
+function renderOpmlXsl() {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:atlas="https://atlasinorbit.com/ns/link-neighborhood">
+  <xsl:output method="html" encoding="UTF-8" indent="yes" />
+
+  <xsl:template match="/opml">
+    <html lang="en">
+      <head>
+        <meta charset="utf-8" />
+        <title><xsl:value-of select="head/title" /></title>
+        <style>
+          body { font-family: Inter, ui-sans-serif, system-ui, sans-serif; margin: 2rem auto; max-width: 900px; padding: 0 1rem; line-height: 1.5; background: #fbfaf7; color: #1f2937; }
+          h1 { line-height: 1.2; }
+          .meta { color: #6b7280; }
+          li { margin: 0.5rem 0; }
+          .tags { color: #7c3aed; font-size: 0.9rem; }
+          code { background: #f3f4f6; padding: 0.15rem 0.35rem; border-radius: 6px; }
+        </style>
+      </head>
+      <body>
+        <h1><xsl:value-of select="head/title" /></h1>
+        <p class="meta">Generated <code><xsl:value-of select="head/dateCreated" /></code></p>
+        <ul>
+          <xsl:apply-templates select="body/outline/outline" />
+        </ul>
+      </body>
+    </html>
+  </xsl:template>
+
+  <xsl:template match="outline[@url]">
+    <li>
+      <a href="{@url}"><xsl:value-of select="@text" /></a>
+      <xsl:if test="@atlas:tags">
+        <span class="tags"> — <xsl:value-of select="@atlas:tags" /></span>
+      </xsl:if>
+    </li>
+  </xsl:template>
+</xsl:stylesheet>
+`;
+}
+
 function renderDot(graph) {
   const lines = ['digraph link_neighborhood {', '  rankdir=LR;', '  node [shape=box, style="rounded"];'];
 
@@ -359,6 +467,7 @@ function renderHtml(report) {
   const domainItems = report.topDomains.map((item) => `<li><strong>${escapeHtml(item.host)}</strong> — ${item.count}</li>`).join('');
   const tagItems = report.tagSummary.map((item) => `<li><strong>${escapeHtml(item.tag)}</strong> — ${item.count}</li>`).join('');
   const wanderItems = report.wanderUrls.map((url) => `<li><a href="${escapeHtml(url)}">${escapeHtml(url)}</a></li>`).join('');
+  const opmlItems = report.opmlEntries.slice(0, 25).map((entry) => `<li><a href="${escapeHtml(entry.url)}">${escapeHtml(entry.text)}</a> <span class="tags">${escapeHtml(entry.tags.join(', '))}</span></li>`).join('');
 
   return `<!doctype html>
 <html lang="en">
@@ -405,6 +514,12 @@ function renderHtml(report) {
     <h2>Wander picks</h2>
     <p>Saved <code>wander.txt</code> with ${report.wanderUrls.length} random discovery URLs as easy places to start drifting from this crawl.</p>
     <ul>${wanderItems || '<li>No wander picks this time.</li>'}</ul>
+  </section>
+
+  <section class="card">
+    <h2>OPML export</h2>
+    <p>Saved <code>blogroll.opml</code> and <code>blogroll.xsl</code> with ${report.opmlEntries.length} discovery entries for feed-reader import or human-readable browsing.</p>
+    <ul>${opmlItems || '<li>No OPML-ish discovery entries found.</li>'}</ul>
   </section>
 
   ${pageCards}
@@ -506,6 +621,7 @@ async function main() {
     wanderUrls,
     graph,
   };
+  report.opmlEntries = pickOpmlEntries(report);
 
   await fs.mkdir(args.outDir, { recursive: true });
   await fs.writeFile(path.join(args.outDir, 'report.json'), JSON.stringify(report, null, 2));
@@ -514,7 +630,9 @@ async function main() {
   await fs.writeFile(path.join(args.outDir, 'wander.txt'), `${wanderUrls.join('\n')}\n`);
   await fs.writeFile(path.join(args.outDir, 'graph.json'), JSON.stringify(graph, null, 2));
   await fs.writeFile(path.join(args.outDir, 'graph.dot'), renderDot(graph));
-  console.error(`Wrote ${path.join(args.outDir, 'report.json')}, report.html, discovery-links.txt, wander.txt, graph.json, and graph.dot`);
+  await fs.writeFile(path.join(args.outDir, 'blogroll.opml'), renderOpml(report));
+  await fs.writeFile(path.join(args.outDir, 'blogroll.xsl'), renderOpmlXsl());
+  console.error(`Wrote ${path.join(args.outDir, 'report.json')}, report.html, discovery-links.txt, wander.txt, graph.json, graph.dot, blogroll.opml, and blogroll.xsl`);
 }
 
 main().catch((error) => {
